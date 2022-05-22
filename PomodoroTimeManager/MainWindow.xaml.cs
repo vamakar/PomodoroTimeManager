@@ -1,23 +1,10 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
-using System.Linq;
-using System.Media;
-using System.Text;
-using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
-using System.Threading;
 using System.Windows.Forms;
 using System.Windows.Threading;
+using PomodoroTimeManager.States;
 
 namespace PomodoroTimeManager
 {
@@ -26,124 +13,133 @@ namespace PomodoroTimeManager
     /// </summary>
     public partial class MainWindow : Window
     {
-        private static DispatcherTimer _timer;
-        private static TimeSpan _dialTime;
-        private static DateTime _end;
-        private static SoundPlayer player;
 
-        private static readonly TimeSpan Second = new TimeSpan(0, 0, 1);
-        private static readonly TimeSpan Minute = new TimeSpan(0, 1, 0);
+        private readonly TimeSpan _second = new TimeSpan(0, 0, 1);
+        private readonly TimeSpan _minute = new TimeSpan(0, 1, 0);
 
-        private NotifyIcon nIcon;
+        internal IState State { get; set; }
+        internal IState Ticking { get; }
+        internal IState Paused { get; }
+        private DispatcherTimer Timer { get; set; }
+        private NotifyIcon NIcon { get; set; }
+        private DateTime End { get; set; }
+        private TimeSpan DialTime { get; set; }
+        private TimeSpan InitTime { get; } = new TimeSpan(0, 25, 0);
+        private WindowState StoredWindowState { get; } = WindowState.Normal;
 
         public MainWindow()
         {
             InitializeComponent();
+            Ticking = new Ticking(this);
+            Paused = new Paused(this);
 
-            nIcon = new NotifyIcon();
-            nIcon.BalloonTipText = "Time is over!";
-            nIcon.BalloonTipTitle = "Pomodoro";
-            nIcon.Text = "Pomodoro";
-            nIcon.Icon = new Icon(@"../../tomato.ico");
-            nIcon.Click += new EventHandler(nIcon_Click);
-            CheckTrayIcon();
-
-            ResetTimer();
+            InitIcon();
+            InitTimer();
+            State = Paused;
         }
 
-        private void ResetTimer()
+        private void InitIcon()
         {
-            _dialTime = new TimeSpan(0, 25, 0);
-            DialTextBox.Text = _dialTime.ToString("mm\\:ss");
+            NIcon = new NotifyIcon
+            {
+                BalloonTipText = "Time is over!",
+                BalloonTipTitle = "Pomodoro",
+                Text = "Pomodoro",
+                Icon = new Icon(@"../../tomato.ico")
+            };
+            NIcon.Click += nIcon_Click;
+            CheckTrayIcon();
+        }
 
-            _timer = new DispatcherTimer(DispatcherPriority.Render);
-            _timer.Tick += CheckSecond;
-            _timer.Interval = new TimeSpan(0, 0, 0,0,1);
+        internal void InitTimer()
+        {
+            DialTime = InitTime;
+            SetTimerTable();
+
+            Timer = new DispatcherTimer(DispatcherPriority.Render);
+            Timer.Tick += CheckSecond;
+            Timer.Interval = new TimeSpan(0, 0, 0, 0, 1);
+        }
+
+        internal void SetTimerTable()
+        {
+            DialTextBox.Text = DialTime.ToString("mm\\:ss");
+        }
+
+        internal void StartTimer()
+        {
+            End = DateTime.Now.Add(_second);
+            Timer.Start();
+        }
+
+        internal void AddMinute()
+        {
+            DialTime = DialTime.Add(_minute);
+
+            if (DialTime > InitTime)
+            {
+                DialTime = InitTime;
+            }
         }
 
         private void CheckSecond(object sender, EventArgs e)
         {
-            if (DateTime.Now < _end) return;
+            if (DateTime.Now < End) return;
 
-            _dialTime = _dialTime.Subtract(Second);
-            DialTextBox.Text = _dialTime.ToString("mm\\:ss");
+            DialTime = DialTime.Subtract(_second);
+            SetTimerTable();
 
-            if (_dialTime.TotalSeconds <= 0)
+            if (DialTime.TotalSeconds <= 0)
             {
-                _timer.Stop();
-
-                Hide();
-                CheckTrayIcon();
-
-                nIcon?.ShowBalloonTip(2000);
-
-                Show();
-                WindowState = m_storedWindowState;
-                CheckTrayIcon();
+                State.Reset(Timer);
+                Notify();
             }
 
-            _end = _end.Add(Second);
+            End = End.Add(_second);
         }
 
-        private void Reset_OnClick(object sender, RoutedEventArgs e)
+        private void Notify()
         {
-            _timer.Stop();
-            ResetTimer();
-        }
+            Hide();
+            CheckTrayIcon();
 
-        private void Start_OnClick(object sender, RoutedEventArgs e)
-        {
-            _end = DateTime.Now.Add(Second);
-            _timer.Start();
-        }
+            NIcon?.ShowBalloonTip(2000);
 
-        private void Pause_OnClick(object sender, RoutedEventArgs e)
-        {
-            _timer.Stop();
-            _dialTime = _dialTime.Add(Minute);
-
-            var tfMinutes = new TimeSpan(0, 25, 0);
-            if (_dialTime > tfMinutes)
-            {
-                _dialTime = tfMinutes;
-            }
-
-            DialTextBox.Text = _dialTime.ToString("mm\\:ss");
+            Show();
+            WindowState = StoredWindowState;
         }
 
         private void OnClose(object sender, CancelEventArgs args)
         {
-            nIcon.Dispose();
-            nIcon = null;
+            NIcon.Dispose();
+            NIcon = null;
         }
 
-        private WindowState m_storedWindowState = WindowState.Normal;
-
-        private void OnStateChanged(object sender, EventArgs args)
+        private void CheckTrayIcon()
         {
-            if (WindowState == WindowState.Minimized)
-            {
-                Hide();
-            }
-            else
-                m_storedWindowState = WindowState;
+            if (NIcon != null)
+                NIcon.Visible = !IsVisible;
+        }
+
+        private void Reset_OnClick(object sender, RoutedEventArgs e)
+        {
+            State.Reset(Timer);
+        }
+
+        private void Start_OnClick(object sender, RoutedEventArgs e)
+        {
+            State.Start(Timer);
+        }
+
+        private void Pause_OnClick(object sender, RoutedEventArgs e)
+        {
+            State.Pause(Timer);
         }
 
         private void nIcon_Click(object sender, EventArgs e)
         {
             Show();
-            WindowState = m_storedWindowState;
-        }
-
-        private void CheckTrayIcon()
-        {
-            ShowTrayIcon(!IsVisible);
-        }
-
-        private void ShowTrayIcon(bool show)
-        {
-            if (nIcon != null)
-                nIcon.Visible = show;
+            WindowState = StoredWindowState;
         }
     }
 }
